@@ -39,6 +39,7 @@ function collectPlayers(){
     base: Number(row.querySelector('.player-level').value),
     skill: Number(row.querySelector('.player-level').value),
     label: LEVEL_LABEL[Number(row.querySelector('.player-level').value)],
+    team: i % 2,
     score:0, correct:0, attempts:0, streak:0, fifty:1, double:1, byCategory:{}
   }));
 }
@@ -46,7 +47,15 @@ function collectPlayers(){
 function chooseQuestion(player){
   const cats = state.categories;
   const desired = Math.max(1, Math.min(5, Math.round(player.skill)));
-  let pool = QUESTIONS.filter(q=>cats.includes(q.c) && Math.abs(q.l-desired)<=1);
+  let preferredCats = cats;
+  if (state.mode === 'learning') {
+    const practiced = Object.entries(player.byCategory).filter(([,v])=>v.n>0);
+    if (practiced.length && Math.random() < 0.65) {
+      practiced.sort((a,b)=>(a[1].ok/a[1].n)-(b[1].ok/b[1].n));
+      preferredCats = [practiced[0][0]];
+    }
+  }
+  let pool = QUESTIONS.filter(q=>preferredCats.includes(q.c) && Math.abs(q.l-desired)<=1);
   const unseen = pool.filter(q=>!state.used.has(`${q.c}|${q.q}`));
   if (unseen.length) pool = unseen;
   if (!pool.length) pool = QUESTIONS.filter(q=>cats.includes(q.c));
@@ -57,7 +66,7 @@ function chooseQuestion(player){
 
 function maybeEvent(){
   if (state.round>0 && state.round % 5 === 0) {
-    const events=['⚡ Lightning round — worth +50 bonus!','🎯 Focus round — streak bonus is doubled!','🎉 Wild round — everybody cheer before answering!'];
+    const events=['⚡ Lightning round — bonus points are live!','🎯 Focus round — extra bonus for getting it right!','🎉 Wild round — everybody cheer before answering!'];
     els.event.textContent=events[(state.round/5-1)%events.length];
     els.event.classList.remove('hidden');
     return state.round % 10 === 0 ? 50 : 25;
@@ -68,7 +77,7 @@ function maybeEvent(){
 async function renderQuestion(){
   const player=state.players[state.turn];
   els.feedback.textContent=''; els.feedback.className='feedback'; doubleActive=false; els.double.classList.remove('active');
-  els.round.textContent=`${state.round+1} / ${state.totalRounds}`; els.turn.textContent=player.name; els.points.textContent=player.score; els.progress.style.width=`${(state.round/state.totalRounds)*100}%`;
+  els.round.textContent=`${state.round+1} / ${state.totalRounds}`; els.turn.textContent=state.mode==='teams'?`${player.name} • ${player.team===0?'Team Purple':'Team Cyan'}`:player.name; els.points.textContent=player.score; els.progress.style.width=`${(state.round/state.totalRounds)*100}%`;
   els.fiftyCount.textContent=player.fifty; els.doubleCount.textContent=player.double;
   let q=chooseQuestion(player);
   if (state.aiReady && Math.random()<0.35) {
@@ -127,8 +136,15 @@ async function startGame(){
 function finishGame(){
   show(els.score); els.progress.style.width='100%';
   const ranked=[...state.players].sort((a,b)=>b.score-a.score);
-  els.winner.textContent=`🏆 ${ranked[0].name} wins with ${ranked[0].score} points!`;
-  els.scoreboard.innerHTML=ranked.map((p,i)=>`<div class="score-row"><span class="rank">${['🥇','🥈','🥉'][i]||`${i+1}.`}</span><strong>${escapeHtml(p.name)}</strong><span class="score">${p.score}</span></div>`).join('');
+  if(state.mode==='teams'){
+    const teamScores=[0,0]; state.players.forEach(p=>teamScores[p.team]+=p.score);
+    const winTeam=teamScores[0]>=teamScores[1]?0:1;
+    els.winner.textContent=`🏆 ${winTeam===0?'Team Purple':'Team Cyan'} wins ${teamScores[winTeam]} to ${teamScores[1-winTeam]}!`;
+    els.scoreboard.innerHTML=[0,1].sort((a,b)=>teamScores[b]-teamScores[a]).map((t,i)=>`<div class="score-row"><span class="rank">${i===0?'🥇':'🥈'}</span><strong>${t===0?'Team Purple':'Team Cyan'}</strong><span class="score">${teamScores[t]}</span></div>`).join('');
+  }else{
+    els.winner.textContent=`🏆 ${ranked[0].name} wins with ${ranked[0].score} points!`;
+    els.scoreboard.innerHTML=ranked.map((p,i)=>`<div class="score-row"><span class="rank">${['🥇','🥈','🥉'][i]||`${i+1}.`}</span><strong>${escapeHtml(p.name)}</strong><span class="score">${p.score}</span></div>`).join('');
+  }
   const insights=ranked.map(p=>{
     const acc=p.attempts?Math.round(p.correct/p.attempts*100):0;
     const weak=Object.entries(p.byCategory).sort((a,b)=>(a[1].ok/a[1].n)-(b[1].ok/b[1].n))[0]?.[0];
