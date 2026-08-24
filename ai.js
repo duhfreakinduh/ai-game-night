@@ -1,47 +1,11 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-const MODEL_ID = 'HuggingFaceTB/SmolLM2-135M-Instruct';
+const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
 
-let generator = null;
+let embedder = null;
 let loading = null;
 let activeBackend = null;
-let lastErrorMessage = '';
 
-const SMART_TWISTS = {
-  math: ['Number ninja time!', 'Crack the number vault!', 'Math boss incoming!', 'Quick—beat the calculator!', 'Numbers are coming in hot!'],
-  words: ['Word wizard challenge!', 'Vocabulary showdown!', 'Decode this word mission!', 'Language boss round!', 'Words are getting wild!'],
-  science: ['Lab coats on!', 'Science mission activated!', 'Experiment time!', 'Professor mode engaged!', 'Unlock this science secret!'],
-  world: ['Around the world we go!', 'Globe-trotter challenge!', 'Passport ready!', 'World explorer mission!', 'Map master time!'],
-  history: ['Time-machine activated!', 'History mystery incoming!', 'Travel back in time!', 'Past meets present!', 'History boss round!'],
-  bible: ['Bible quest activated!', 'Scripture challenge!', 'Bible explorer time!', 'Faith quest incoming!', 'Unlock this Bible clue!'],
-};
-
-function outputText(output) {
-  const generated = output?.[0]?.generated_text;
-  if (typeof generated === 'string') return generated.trim();
-  if (Array.isArray(generated)) {
-    const last = generated.at(-1);
-    if (typeof last === 'string') return last.trim();
-    if (typeof last?.content === 'string') return last.content.trim();
-  }
-  return '';
-}
-
-function cleanTwist(text) {
-  return String(text || '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/^\s*[-*"']+|[-*"']+\s*$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 90);
-}
-
-function smartRemix(seed) {
-  const choices = SMART_TWISTS[seed.c] || ['Game Master challenge!'];
-  const twist = choices[Math.floor(Math.random() * choices.length)];
-  return { ...seed, a: [...seed.a], q: `${twist} — ${seed.q}`, smart: true };
-}
-
-function progressReporter(onProgress, backendLabel) {
+function progressReporter(onProgress) {
   let lastPercent = -1;
   return (p) => {
     const value = Number(p?.progress);
@@ -49,73 +13,66 @@ function progressReporter(onProgress, backendLabel) {
     const percent = Math.max(0, Math.min(100, Math.round(value)));
     if (percent === lastPercent) return;
     lastPercent = percent;
-    onProgress(`AI ${backendLabel}: downloading ${percent}%`);
+    onProgress(`AI download ${percent}%`);
   };
 }
 
-async function disposeGenerator() {
-  try { await generator?.dispose?.(); } catch (err) { console.warn('AI cleanup warning:', err); }
-  generator = null;
+async function embedTexts(texts) {
+  if (!embedder || !texts.length) return [];
+  const output = await embedder(texts, { pooling: 'mean', normalize: true });
+  if (typeof output?.tolist === 'function') return output.tolist();
+  if (Array.isArray(output)) return output;
+  throw new Error('AI embedding output was not readable');
 }
 
-async function loadPipeline(pipeline, options, label, onProgress) {
-  onProgress(`Loading Hugging Face AI on ${label}…`);
-  generator = await pipeline('text-generation', MODEL_ID, {
-    ...options,
-    progress_callback: progressReporter(onProgress, label),
-  });
-  activeBackend = label;
-  onProgress(`Hugging Face AI ready (${label}).`);
-  return true;
+function dot(a, b) {
+  let total = 0;
+  const n = Math.min(a?.length || 0, b?.length || 0);
+  for (let i = 0; i < n; i++) total += a[i] * b[i];
+  return total;
+}
+
+async function selfTest() {
+  const rows = await embedTexts(['Brain Bash learning game', 'A completely different sentence']);
+  if (!Array.isArray(rows) || rows.length !== 2 || !Array.isArray(rows[0]) || rows[0].length < 32) {
+    throw new Error('AI self-test returned invalid embeddings');
+  }
 }
 
 export async function initAI(onProgress = () => {}) {
-  if (generator) {
-    onProgress(`Hugging Face AI ready (${activeBackend}).`);
-    return true;
-  }
-  if (activeBackend === 'SMART') {
-    onProgress('Smart Game Master ready. Hugging Face will retry after a page refresh.');
+  if (embedder) {
+    onProgress('AI Game Master ready — semantic variety is ON.');
     return true;
   }
   if (loading) return loading;
 
   loading = (async () => {
     try {
-      lastErrorMessage = '';
-      onProgress('Starting Hugging Face AI… first download is cached on this phone.');
+      onProgress('Starting lightweight Hugging Face AI…');
       const { pipeline, env } = await import(TRANSFORMERS_URL);
       env.allowLocalModels = false;
       env.useBrowserCache = true;
 
-      const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu;
-      let lastError = null;
+      // Default browser execution is WASM/CPU. It is the most reliable path on Android.
+      onProgress('Loading phone-friendly AI model…');
+      embedder = await pipeline('feature-extraction', MODEL_ID, {
+        dtype: 'q8',
+        progress_callback: progressReporter(onProgress),
+      });
+      activeBackend = 'phone CPU';
 
-      if (hasWebGPU) {
-        try {
-          return await loadPipeline(pipeline, { device: 'webgpu', dtype: 'q4f16' }, 'GPU', onProgress);
-        } catch (err) {
-          lastError = err;
-          console.warn('AI GPU failed:', err);
-          await disposeGenerator();
-          onProgress('GPU mode failed. Trying CPU mode…');
-        }
-      }
-
-      try {
-        return await loadPipeline(pipeline, { dtype: 'q4' }, 'CPU', onProgress);
-      } catch (err) {
-        lastError = err;
-        console.warn('AI CPU failed:', err);
-        await disposeGenerator();
-      }
-
-      throw lastError || new Error('No local AI backend was available');
-    } catch (err) {
-      lastErrorMessage = String(err?.message || err || 'Unknown AI startup error').slice(0, 180);
-      activeBackend = 'SMART';
-      onProgress('Smart Game Master active. This browser blocked the Hugging Face model, so Brain Bash switched automatically instead of failing.');
+      onProgress('Testing AI…');
+      await selfTest();
+      onProgress('AI Game Master ready — semantic variety is ON.');
       return true;
+    } catch (err) {
+      console.error('Brain Bash AI failed:', err);
+      try { await embedder?.dispose?.(); } catch {}
+      embedder = null;
+      activeBackend = null;
+      const detail = String(err?.message || err || 'unknown error').slice(0, 140);
+      onProgress(`AI load failed: ${detail}`);
+      return false;
     } finally {
       loading = null;
     }
@@ -124,28 +81,45 @@ export async function initAI(onProgress = () => {}) {
   return loading;
 }
 
-export async function remixQuestion(seed, player) {
-  if (!generator) return smartRemix(seed);
+export async function chooseWithAI(candidates, recentTexts = []) {
+  if (!Array.isArray(candidates) || !candidates.length) return null;
+  if (!embedder || candidates.length < 2) {
+    return candidates[Math.floor(Math.random() * candidates.length)] || candidates[0];
+  }
 
-  const prompt = `Write ONE short, fun game-show intro of at most 8 words for a ${player.label} player about to answer a ${seed.c} question. Do not reveal or hint at the answer. No quotes. No markdown. Intro only.`;
+  // Keep each round fast on a phone: compare at most 10 viable questions
+  // against the last 5 questions the player saw.
+  const shuffled = [...candidates].sort(() => Math.random() - 0.5).slice(0, 10);
+  const recent = recentTexts.filter(Boolean).slice(-5);
+  if (!recent.length) {
+    return { ...shuffled[Math.floor(Math.random() * shuffled.length)], aiPick: true };
+  }
 
   try {
-    const out = await generator(prompt, {
-      max_new_tokens: 18,
-      temperature: 0.9,
-      top_p: 0.92,
-      do_sample: true,
-      return_full_text: false,
-    });
-    const twist = cleanTwist(outputText(out));
-    if (!twist || twist.length < 3) return smartRemix(seed);
-    return { ...seed, a: [...seed.a], q: `${twist} — ${seed.q}`, ai: true };
+    const vectors = await embedTexts([...shuffled.map(q => q.q), ...recent]);
+    const candidateVectors = vectors.slice(0, shuffled.length);
+    const recentVectors = vectors.slice(shuffled.length);
+
+    let bestIndex = 0;
+    let bestScore = Infinity;
+    for (let i = 0; i < candidateVectors.length; i++) {
+      let maxSimilarity = -1;
+      for (const oldVector of recentVectors) {
+        maxSimilarity = Math.max(maxSimilarity, dot(candidateVectors[i], oldVector));
+      }
+      if (maxSimilarity < bestScore) {
+        bestScore = maxSimilarity;
+        bestIndex = i;
+      }
+    }
+
+    return { ...shuffled[bestIndex], aiPick: true };
   } catch (err) {
-    console.warn('AI twist failed, using smart fallback:', err);
-    return smartRemix(seed);
+    console.warn('AI question selection failed; using normal picker:', err);
+    return shuffled[Math.floor(Math.random() * shuffled.length)] || candidates[0];
   }
 }
 
 export function getAIStatus() {
-  return { ready: !!generator || activeBackend === 'SMART', backend: activeBackend, model: MODEL_ID, error: lastErrorMessage };
+  return { ready: !!embedder, backend: activeBackend, model: MODEL_ID };
 }
