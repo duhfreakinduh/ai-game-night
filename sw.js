@@ -1,4 +1,4 @@
-const CACHE='brain-bash-v2';
+const CACHE='brain-bash-v3';
 const CORE=['./','./index.html','./styles.css','./app.js','./questions.js','./ai.js','./manifest.webmanifest','./icon.svg'];
 
 self.addEventListener('install',event=>{
