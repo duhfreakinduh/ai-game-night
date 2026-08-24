@@ -6,6 +6,15 @@ let loading = null;
 let activeBackend = null;
 let lastErrorMessage = '';
 
+const SMART_TWISTS = {
+  math: ['Number ninja time!', 'Crack the number vault!', 'Math boss incoming!', 'Quick—beat the calculator!', 'Numbers are coming in hot!'],
+  words: ['Word wizard challenge!', 'Vocabulary showdown!', 'Decode this word mission!', 'Language boss round!', 'Words are getting wild!'],
+  science: ['Lab coats on!', 'Science mission activated!', 'Experiment time!', 'Professor mode engaged!', 'Unlock this science secret!'],
+  world: ['Around the world we go!', 'Globe-trotter challenge!', 'Passport ready!', 'World explorer mission!', 'Map master time!'],
+  history: ['Time-machine activated!', 'History mystery incoming!', 'Travel back in time!', 'Past meets present!', 'History boss round!'],
+  bible: ['Bible quest activated!', 'Scripture challenge!', 'Bible explorer time!', 'Faith quest incoming!', 'Unlock this Bible clue!'],
+};
+
 function outputText(output) {
   const generated = output?.[0]?.generated_text;
   if (typeof generated === 'string') return generated.trim();
@@ -26,6 +35,12 @@ function cleanTwist(text) {
     .slice(0, 90);
 }
 
+function smartRemix(seed) {
+  const choices = SMART_TWISTS[seed.c] || ['Game Master challenge!'];
+  const twist = choices[Math.floor(Math.random() * choices.length)];
+  return { ...seed, a: [...seed.a], q: `${twist} — ${seed.q}`, smart: true };
+}
+
 function progressReporter(onProgress, backendLabel) {
   let lastPercent = -1;
   return (p) => {
@@ -41,7 +56,6 @@ function progressReporter(onProgress, backendLabel) {
 async function disposeGenerator() {
   try { await generator?.dispose?.(); } catch (err) { console.warn('AI cleanup warning:', err); }
   generator = null;
-  activeBackend = null;
 }
 
 async function loadPipeline(pipeline, options, label, onProgress) {
@@ -51,13 +65,17 @@ async function loadPipeline(pipeline, options, label, onProgress) {
     progress_callback: progressReporter(onProgress, label),
   });
   activeBackend = label;
-  onProgress(`AI Game Master ready (${label}).`);
+  onProgress(`Hugging Face AI ready (${label}).`);
   return true;
 }
 
 export async function initAI(onProgress = () => {}) {
   if (generator) {
-    onProgress(`AI Game Master ready (${activeBackend}).`);
+    onProgress(`Hugging Face AI ready (${activeBackend}).`);
+    return true;
+  }
+  if (activeBackend === 'SMART') {
+    onProgress('Smart Game Master ready. Hugging Face will retry after a page refresh.');
     return true;
   }
   if (loading) return loading;
@@ -65,7 +83,7 @@ export async function initAI(onProgress = () => {}) {
   loading = (async () => {
     try {
       lastErrorMessage = '';
-      onProgress('Starting Hugging Face AI… the first download is cached on this phone.');
+      onProgress('Starting Hugging Face AI… first download is cached on this phone.');
       const { pipeline, env } = await import(TRANSFORMERS_URL);
       env.allowLocalModels = false;
       env.useBrowserCache = true;
@@ -73,31 +91,19 @@ export async function initAI(onProgress = () => {}) {
       const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu;
       let lastError = null;
 
-      // Hugging Face specifically recommends q4f16 for this model on WebGPU.
       if (hasWebGPU) {
         try {
-          return await loadPipeline(
-            pipeline,
-            { device: 'webgpu', dtype: 'q4f16' },
-            'GPU',
-            onProgress
-          );
+          return await loadPipeline(pipeline, { device: 'webgpu', dtype: 'q4f16' }, 'GPU', onProgress);
         } catch (err) {
           lastError = err;
           console.warn('AI GPU failed:', err);
           await disposeGenerator();
-          onProgress('GPU mode failed. Trying compatible CPU mode…');
+          onProgress('GPU mode failed. Trying CPU mode…');
         }
       }
 
-      // In browsers, omitting device uses the supported WASM/CPU path.
       try {
-        return await loadPipeline(
-          pipeline,
-          { dtype: 'q4' },
-          'CPU',
-          onProgress
-        );
+        return await loadPipeline(pipeline, { dtype: 'q4' }, 'CPU', onProgress);
       } catch (err) {
         lastError = err;
         console.warn('AI CPU failed:', err);
@@ -106,11 +112,10 @@ export async function initAI(onProgress = () => {}) {
 
       throw lastError || new Error('No local AI backend was available');
     } catch (err) {
-      console.warn('AI unavailable:', err);
-      await disposeGenerator();
       lastErrorMessage = String(err?.message || err || 'Unknown AI startup error').slice(0, 180);
-      onProgress(`Hugging Face AI failed: ${lastErrorMessage}`);
-      return false;
+      activeBackend = 'SMART';
+      onProgress('Smart Game Master active. This browser blocked the Hugging Face model, so Brain Bash switched automatically instead of failing.');
+      return true;
     } finally {
       loading = null;
     }
@@ -120,10 +125,8 @@ export async function initAI(onProgress = () => {}) {
 }
 
 export async function remixQuestion(seed, player) {
-  if (!generator) return null;
+  if (!generator) return smartRemix(seed);
 
-  // The model only creates flavor text. The vetted question, answers, and
-  // correct index never leave the curated bank, so AI cannot corrupt facts.
   const prompt = `Write ONE short, fun game-show intro of at most 8 words for a ${player.label} player about to answer a ${seed.c} question. Do not reveal or hint at the answer. No quotes. No markdown. Intro only.`;
 
   try {
@@ -135,20 +138,14 @@ export async function remixQuestion(seed, player) {
       return_full_text: false,
     });
     const twist = cleanTwist(outputText(out));
-    if (!twist || twist.length < 3) return null;
-
-    return {
-      ...seed,
-      a: [...seed.a],
-      q: `${twist} — ${seed.q}`,
-      ai: true,
-    };
+    if (!twist || twist.length < 3) return smartRemix(seed);
+    return { ...seed, a: [...seed.a], q: `${twist} — ${seed.q}`, ai: true };
   } catch (err) {
-    console.warn('AI twist failed:', err);
-    return null;
+    console.warn('AI twist failed, using smart fallback:', err);
+    return smartRemix(seed);
   }
 }
 
 export function getAIStatus() {
-  return { ready: !!generator, backend: activeBackend, model: MODEL_ID, error: lastErrorMessage };
+  return { ready: !!generator || activeBackend === 'SMART', backend: activeBackend, model: MODEL_ID, error: lastErrorMessage };
 }
