@@ -6,10 +6,13 @@ on:
   pull_request:
 
 jobs:
-  syntax:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Check JavaScript syntax
         run: |
           node --check app.js
@@ -18,3 +21,7 @@ jobs:
           node --check sw.js
       - name: Check manifest JSON
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.webmanifest','utf8')); console.log('manifest OK')"
+      - name: Smoke-test Hugging Face semantic AI
+        run: |
+          npm install --no-save @huggingface/transformers@4.2.0
+          node --input-type=module -e "import { pipeline } from '@huggingface/transformers'; const e=await pipeline('feature-extraction','onnx-community/all-MiniLM-L6-v2-ONNX',{dtype:'q8'}); const o=await e(['Brain Bash learning game','different question'],{pooling:'mean',normalize:true}); const r=o.tolist(); if(r.length!==2 || !Array.isArray(r[0]) || r[0].length<32) throw new Error('bad embedding output'); console.log('AI smoke test OK:',r.length,'x',r[0].length); await e.dispose();"
