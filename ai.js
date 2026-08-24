@@ -1,12 +1,10 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-const MODEL_ID = 'onnx-community/SmolLM2-135M-Instruct-ONNX-MHA';
+const MODEL_ID = 'HuggingFaceTB/SmolLM2-135M-Instruct';
 
 let generator = null;
 let loading = null;
 let activeBackend = null;
 let lastErrorMessage = '';
-
-const normalize = (value) => String(value).trim().toLocaleLowerCase();
 
 function outputText(output) {
   const generated = output?.[0]?.generated_text;
@@ -17,6 +15,15 @@ function outputText(output) {
     if (typeof last?.content === 'string') return last.content.trim();
   }
   return '';
+}
+
+function cleanTwist(text) {
+  return String(text || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/^\s*[-*"']+|[-*"']+\s*$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 90);
 }
 
 function progressReporter(onProgress, backendLabel) {
@@ -32,33 +39,18 @@ function progressReporter(onProgress, backendLabel) {
 }
 
 async function disposeGenerator() {
-  try {
-    await generator?.dispose?.();
-  } catch (err) {
-    console.warn('AI cleanup warning:', err);
-  }
+  try { await generator?.dispose?.(); } catch (err) { console.warn('AI cleanup warning:', err); }
   generator = null;
   activeBackend = null;
 }
 
-async function selfTest() {
-  const output = await generator(
-    [{ role: 'user', content: 'Reply with only READY.' }],
-    { max_new_tokens: 8, do_sample: false }
-  );
-  const text = outputText(output);
-  if (!text) throw new Error('AI self-test returned no text');
-}
-
 async function loadPipeline(pipeline, options, label, onProgress) {
-  onProgress(`Loading lightweight AI on ${label}…`);
+  onProgress(`Loading Hugging Face AI on ${label}…`);
   generator = await pipeline('text-generation', MODEL_ID, {
     ...options,
     progress_callback: progressReporter(onProgress, label),
   });
   activeBackend = label;
-  onProgress(`Testing AI on ${label}…`);
-  await selfTest();
   onProgress(`AI Game Master ready (${label}).`);
   return true;
 }
@@ -73,11 +65,15 @@ export async function initAI(onProgress = () => {}) {
   loading = (async () => {
     try {
       lastErrorMessage = '';
-      onProgress('Starting lightweight Hugging Face AI… first load is cached on this phone.');
-      const { pipeline } = await import(TRANSFORMERS_URL);
+      onProgress('Starting Hugging Face AI… the first download is cached on this phone.');
+      const { pipeline, env } = await import(TRANSFORMERS_URL);
+      env.allowLocalModels = false;
+      env.useBrowserCache = true;
+
       const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu;
       let lastError = null;
 
+      // Hugging Face specifically recommends q4f16 for this model on WebGPU.
       if (hasWebGPU) {
         try {
           return await loadPipeline(
@@ -90,15 +86,15 @@ export async function initAI(onProgress = () => {}) {
           lastError = err;
           console.warn('AI GPU failed:', err);
           await disposeGenerator();
-          onProgress('GPU mode did not start. Trying phone-compatible CPU mode…');
+          onProgress('GPU mode failed. Trying compatible CPU mode…');
         }
       }
 
+      // In browsers, omitting device uses the supported WASM/CPU path.
       try {
-        // IMPORTANT: leaving device unset is the supported Transformers.js WASM/CPU path.
         return await loadPipeline(
           pipeline,
-          { dtype: 'q8' },
+          { dtype: 'q4' },
           'CPU',
           onProgress
         );
@@ -108,12 +104,12 @@ export async function initAI(onProgress = () => {}) {
         await disposeGenerator();
       }
 
-      throw lastError || new Error('No AI backend was available');
+      throw lastError || new Error('No local AI backend was available');
     } catch (err) {
       console.warn('AI unavailable:', err);
       await disposeGenerator();
       lastErrorMessage = String(err?.message || err || 'Unknown AI startup error').slice(0, 180);
-      onProgress(`AI startup failed: ${lastErrorMessage}`);
+      onProgress(`Hugging Face AI failed: ${lastErrorMessage}`);
       return false;
     } finally {
       loading = null;
@@ -126,59 +122,33 @@ export async function initAI(onProgress = () => {}) {
 export async function remixQuestion(seed, player) {
   if (!generator) return null;
 
-  const canonicalAnswer = String(seed.a[seed.x]);
-  const messages = [
-    {
-      role: 'system',
-      content: 'You are Brain Bash, a family-safe learning game master. Never change the factual answer. Output only valid JSON and no markdown.',
-    },
-    {
-      role: 'user',
-      content: `Rewrite this multiple-choice question for a ${player.label} player. Keep this exact correct answer text: ${JSON.stringify(canonicalAnswer)}. Keep four answer choices. Make it playful, clear, short, and age appropriate. Return JSON only with keys q, answers, correctIndex, hint. Seed: ${JSON.stringify(seed)}`,
-    },
-  ];
+  // The model only creates flavor text. The vetted question, answers, and
+  // correct index never leave the curated bank, so AI cannot corrupt facts.
+  const prompt = `Write ONE short, fun game-show intro of at most 8 words for a ${player.label} player about to answer a ${seed.c} question. Do not reveal or hint at the answer. No quotes. No markdown. Intro only.`;
 
   try {
-    const out = await generator(messages, {
-      max_new_tokens: 120,
-      temperature: 0.45,
-      top_p: 0.9,
+    const out = await generator(prompt, {
+      max_new_tokens: 18,
+      temperature: 0.9,
+      top_p: 0.92,
       do_sample: true,
+      return_full_text: false,
     });
-    const text = outputText(out);
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-
-    const parsed = JSON.parse(match[0]);
-    if (!Array.isArray(parsed.answers) || parsed.answers.length !== 4) return null;
-    if (!Number.isInteger(parsed.correctIndex) || parsed.correctIndex < 0 || parsed.correctIndex > 3) return null;
-    if (normalize(parsed.answers[parsed.correctIndex]) !== normalize(canonicalAnswer)) return null;
-
-    const q = String(parsed.q || '').trim();
-    const answers = parsed.answers.map((v) => String(v).trim());
-    if (q.length < 4 || q.length > 240 || answers.some((a) => !a || a.length > 100)) return null;
-    if (new Set(answers.map(normalize)).size !== 4) return null;
+    const twist = cleanTwist(outputText(out));
+    if (!twist || twist.length < 3) return null;
 
     return {
-      c: seed.c,
-      l: seed.l,
-      q,
-      a: answers,
-      x: parsed.correctIndex,
-      h: String(parsed.hint || seed.h).trim().slice(0, 180),
+      ...seed,
+      a: [...seed.a],
+      q: `${twist} — ${seed.q}`,
       ai: true,
     };
   } catch (err) {
-    console.warn('AI remix failed:', err);
+    console.warn('AI twist failed:', err);
     return null;
   }
 }
 
 export function getAIStatus() {
-  return {
-    ready: !!generator,
-    backend: activeBackend,
-    model: MODEL_ID,
-    error: lastErrorMessage,
-  };
+  return { ready: !!generator, backend: activeBackend, model: MODEL_ID, error: lastErrorMessage };
 }
