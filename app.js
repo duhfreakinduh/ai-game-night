@@ -9,6 +9,8 @@ const els = {
 
 const LEVEL_LABEL = {1:'Little Learner',2:'Explorer',3:'Rising Star',4:'Teen',5:'Adult'};
 const storeKey = 'brain-bash-ai-v1';
+const recentKey = 'brain-bash-recent-v2';
+const RECENT_LIMIT = 120;
 let state = null;
 let soundOn = true;
 let currentQuestion = null;
@@ -32,6 +34,23 @@ function setupDefaults(){
   if (saved?.rounds) els.rounds.value = String(saved.rounds);
 }
 
+function loadRecent(){
+  try {
+    const value=JSON.parse(localStorage.getItem(recentKey) || '[]');
+    return Array.isArray(value) ? value.filter(v=>typeof v==='string').slice(-RECENT_LIMIT) : [];
+  } catch { return []; }
+}
+
+function questionSig(q){ return `${q.c}|${q.l}|${q.q}`; }
+function rememberQuestion(q){
+  const sig=questionSig(q);
+  state.used.add(sig);
+  state.recent=state.recent.filter(v=>v!==sig);
+  state.recent.push(sig);
+  if(state.recent.length>RECENT_LIMIT) state.recent=state.recent.slice(-RECENT_LIMIT);
+  try { localStorage.setItem(recentKey,JSON.stringify(state.recent)); } catch {}
+}
+
 function getCategories(){ return $$('.categories input:checked').map(x=>x.value); }
 function collectPlayers(){
   return $$('.player-row').map((row,i)=>({
@@ -48,6 +67,7 @@ function chooseQuestion(player){
   const cats = state.categories;
   const desired = Math.max(1, Math.min(5, Math.round(player.skill)));
   let preferredCats = cats;
+
   if (state.mode === 'learning') {
     const practiced = Object.entries(player.byCategory).filter(([,v])=>v.n>0);
     if (practiced.length && Math.random() < 0.65) {
@@ -55,12 +75,27 @@ function chooseQuestion(player){
       preferredCats = [practiced[0][0]];
     }
   }
-  let pool = QUESTIONS.filter(q=>preferredCats.includes(q.c) && Math.abs(q.l-desired)<=1);
-  const unseen = pool.filter(q=>!state.used.has(`${q.c}|${q.q}`));
-  if (unseen.length) pool = unseen;
-  if (!pool.length) pool = QUESTIONS.filter(q=>cats.includes(q.c));
-  const q = pool[Math.floor(Math.random()*pool.length)];
-  state.used.add(`${q.c}|${q.q}`);
+
+  // Pick a category first so large banks (like math) do not dominate every round.
+  const chosenCat=preferredCats[Math.floor(Math.random()*preferredCats.length)];
+  let pool=QUESTIONS.filter(q=>q.c===chosenCat && Math.abs(q.l-desired)<=1);
+  if(!pool.length) pool=QUESTIONS.filter(q=>q.c===chosenCat);
+
+  // Best case: neither this game nor the recent-games history has seen it.
+  let candidates=pool.filter(q=>!state.used.has(questionSig(q)) && !state.recent.includes(questionSig(q)));
+  // If a narrow difficulty/category pool is exhausted, allow older history but still no repeats this game.
+  if(!candidates.length) candidates=pool.filter(q=>!state.used.has(questionSig(q)));
+  // Broaden difficulty while still respecting category and recent history.
+  if(!candidates.length){
+    pool=QUESTIONS.filter(q=>q.c===chosenCat);
+    candidates=pool.filter(q=>!state.used.has(questionSig(q)) && !state.recent.includes(questionSig(q)));
+  }
+  if(!candidates.length) candidates=pool.filter(q=>!state.used.has(questionSig(q)));
+  // Only after everything is exhausted can a repeat happen.
+  if(!candidates.length) candidates=pool;
+
+  const q=candidates[Math.floor(Math.random()*candidates.length)];
+  rememberQuestion(q);
   return {...q,a:[...q.a]};
 }
 
@@ -125,7 +160,7 @@ async function startGame(){
   const players=collectPlayers(), categories=getCategories();
   if(players.length<2 || !categories.length) return;
   localStorage.setItem(storeKey,JSON.stringify({players:players.map(p=>({name:p.name,level:p.base})),mode:els.mode.value,rounds:Number(els.rounds.value)}));
-  state={players,categories,mode:els.mode.value,totalRounds:Number(els.rounds.value),round:0,turn:0,used:new Set(),aiReady:false,eventBonus:0,aiUsed:0};
+  state={players,categories,mode:els.mode.value,totalRounds:Number(els.rounds.value),round:0,turn:0,used:new Set(),recent:loadRecent(),aiReady:false,eventBonus:0,aiUsed:0};
   show(els.game);
   if(els.ai.checked){
     els.aiStatus.textContent='Loading AI… core game remains playable.';
@@ -152,7 +187,7 @@ function finishGame(){
     return `<p><strong>${escapeHtml(p.name)}</strong>: ${acc}% correct. ${weak?`Next game can give a little extra practice in <b>${weak}</b>.`:''}</p>`;
   }).join('');
   const aiNote=state.aiReady?`<p class="muted">AI Game Master remixed <b>${state.aiUsed}</b> question${state.aiUsed===1?'':'s'} this game.</p>`:'';
-  els.summary.innerHTML=`<h3>Learning recap</h3>${insights}${aiNote}<p class="muted">Difficulty adjusted automatically during play based on each player's answers and streaks.</p>`;
+  els.summary.innerHTML=`<h3>Learning recap</h3>${insights}${aiNote}<p class="muted">Difficulty adjusted automatically during play. The game also remembers recently seen questions to reduce repeats next time.</p>`;
 }
 
 function useFifty(){
