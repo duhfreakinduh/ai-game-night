@@ -80,12 +80,13 @@ async function renderQuestion(){
   els.round.textContent=`${state.round+1} / ${state.totalRounds}`; els.turn.textContent=state.mode==='teams'?`${player.name} • ${player.team===0?'Team Purple':'Team Cyan'}`:player.name; els.points.textContent=player.score; els.progress.style.width=`${(state.round/state.totalRounds)*100}%`;
   els.fiftyCount.textContent=player.fifty; els.doubleCount.textContent=player.double;
   let q=chooseQuestion(player);
-  if (state.aiReady && Math.random()<0.35) {
+  if (state.aiReady && (state.round===0 || Math.random()<0.45)) {
     els.q.textContent='AI Game Master is remixing this one…'; els.answers.innerHTML='';
-    q=(await remixQuestion(q,player))||q;
+    const remixed=await remixQuestion(q,player);
+    if(remixed){ q=remixed; state.aiUsed=(state.aiUsed||0)+1; }
   }
   currentQuestion=q;
-  els.cat.textContent=q.c.toUpperCase(); els.diff.textContent=`LEVEL ${q.l}`; els.q.textContent=q.q;
+  els.cat.textContent=q.c.toUpperCase(); els.diff.textContent=`LEVEL ${q.l}${q.ai?' • AI':''}`; els.q.textContent=q.q;
   els.answers.innerHTML='';
   q.a.forEach((answer,i)=>{
     const b=document.createElement('button'); b.className='answer-btn'; b.textContent=`${String.fromCharCode(65+i)}. ${answer}`; b.dataset.i=i; b.onclick=()=>answerQuestion(i,b); els.answers.append(b);
@@ -124,7 +125,7 @@ async function startGame(){
   const players=collectPlayers(), categories=getCategories();
   if(players.length<2 || !categories.length) return;
   localStorage.setItem(storeKey,JSON.stringify({players:players.map(p=>({name:p.name,level:p.base})),mode:els.mode.value,rounds:Number(els.rounds.value)}));
-  state={players,categories,mode:els.mode.value,totalRounds:Number(els.rounds.value),round:0,turn:0,used:new Set(),aiReady:false,eventBonus:0};
+  state={players,categories,mode:els.mode.value,totalRounds:Number(els.rounds.value),round:0,turn:0,used:new Set(),aiReady:false,eventBonus:0,aiUsed:0};
   show(els.game);
   if(els.ai.checked){
     els.aiStatus.textContent='Loading AI… core game remains playable.';
@@ -150,7 +151,8 @@ function finishGame(){
     const weak=Object.entries(p.byCategory).sort((a,b)=>(a[1].ok/a[1].n)-(b[1].ok/b[1].n))[0]?.[0];
     return `<p><strong>${escapeHtml(p.name)}</strong>: ${acc}% correct. ${weak?`Next game can give a little extra practice in <b>${weak}</b>.`:''}</p>`;
   }).join('');
-  els.summary.innerHTML=`<h3>Learning recap</h3>${insights}<p class="muted">Difficulty adjusted automatically during play based on each player's answers and streaks.</p>`;
+  const aiNote=state.aiReady?`<p class="muted">AI Game Master remixed <b>${state.aiUsed}</b> question${state.aiUsed===1?'':'s'} this game.</p>`:'';
+  els.summary.innerHTML=`<h3>Learning recap</h3>${insights}${aiNote}<p class="muted">Difficulty adjusted automatically during play based on each player's answers and streaks.</p>`;
 }
 
 function useFifty(){
