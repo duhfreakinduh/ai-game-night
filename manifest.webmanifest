@@ -1,0 +1,10 @@
+{
+  "name": "Brain Bash AI",
+  "short_name": "Brain Bash",
+  "description": "Adaptive family learning game for 2–10 players.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#090b15",
+  "theme_color": "#111827",
+  "icons": [{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
