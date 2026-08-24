@@ -1,5 +1,5 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-const MODEL_ID = 'onnx-community/all-MiniLM-L6-v2-ONNX';
+const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
 
 let embedder = null;
 let loading = null;
@@ -53,7 +53,6 @@ export async function initAI(onProgress = () => {}) {
       env.allowLocalModels = false;
       env.useBrowserCache = true;
 
-      // Default browser execution is WASM/CPU. It is the most reliable path on Android.
       onProgress('Loading phone-friendly AI model…');
       embedder = await pipeline('feature-extraction', MODEL_ID, {
         dtype: 'q8',
@@ -87,8 +86,6 @@ export async function chooseWithAI(candidates, recentTexts = []) {
     return candidates[Math.floor(Math.random() * candidates.length)] || candidates[0];
   }
 
-  // Keep each round fast on a phone: compare at most 10 viable questions
-  // against the last 5 questions the player saw.
   const shuffled = [...candidates].sort(() => Math.random() - 0.5).slice(0, 10);
   const recent = recentTexts.filter(Boolean).slice(-5);
   if (!recent.length) {
