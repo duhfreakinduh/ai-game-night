@@ -1,9 +1,10 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-const MODEL_ID = 'onnx-community/gemma-3-270m-it-ONNX';
+const MODEL_ID = 'onnx-community/SmolLM2-135M-Instruct-ONNX-MHA';
 
 let generator = null;
 let loading = null;
 let activeBackend = null;
+let lastErrorMessage = '';
 
 const normalize = (value) => String(value).trim().toLocaleLowerCase();
 
@@ -42,10 +43,24 @@ async function disposeGenerator() {
 
 async function selfTest() {
   const output = await generator(
-    [{ role: 'user', content: 'Reply with the single word READY.' }],
+    [{ role: 'user', content: 'Reply with only READY.' }],
     { max_new_tokens: 8, do_sample: false }
   );
-  if (!outputText(output)) throw new Error('AI self-test returned no text');
+  const text = outputText(output);
+  if (!text) throw new Error('AI self-test returned no text');
+}
+
+async function loadPipeline(pipeline, options, label, onProgress) {
+  onProgress(`Loading lightweight AI on ${label}…`);
+  generator = await pipeline('text-generation', MODEL_ID, {
+    ...options,
+    progress_callback: progressReporter(onProgress, label),
+  });
+  activeBackend = label;
+  onProgress(`Testing AI on ${label}…`);
+  await selfTest();
+  onProgress(`AI Game Master ready (${label}).`);
+  return true;
 }
 
 export async function initAI(onProgress = () => {}) {
@@ -57,45 +72,48 @@ export async function initAI(onProgress = () => {}) {
 
   loading = (async () => {
     try {
-      onProgress('Starting Hugging Face AI… first load is about 325 MB and is cached by your browser.');
+      lastErrorMessage = '';
+      onProgress('Starting lightweight Hugging Face AI… first load is cached on this phone.');
       const { pipeline } = await import(TRANSFORMERS_URL);
       const hasWebGPU = typeof navigator !== 'undefined' && !!navigator.gpu;
-      const attempts = hasWebGPU
-        ? [
-            { device: 'webgpu', dtype: 'q4', label: 'GPU' },
-            { device: 'wasm', dtype: 'q4', label: 'CPU fallback' },
-          ]
-        : [{ device: 'wasm', dtype: 'q4', label: 'CPU' }];
-
       let lastError = null;
-      for (const attempt of attempts) {
+
+      if (hasWebGPU) {
         try {
-          onProgress(`Loading AI on ${attempt.label}…`);
-          generator = await pipeline('text-generation', MODEL_ID, {
-            device: attempt.device,
-            dtype: attempt.dtype,
-            progress_callback: progressReporter(onProgress, attempt.label),
-          });
-          activeBackend = attempt.label;
-          onProgress(`Testing AI on ${attempt.label}…`);
-          await selfTest();
-          onProgress(`AI Game Master ready (${attempt.label}).`);
-          return true;
+          return await loadPipeline(
+            pipeline,
+            { device: 'webgpu', dtype: 'q4f16' },
+            'GPU',
+            onProgress
+          );
         } catch (err) {
           lastError = err;
-          console.warn(`AI ${attempt.label} failed:`, err);
+          console.warn('AI GPU failed:', err);
           await disposeGenerator();
-          if (attempt.device === 'webgpu') {
-            onProgress('GPU AI did not start. Trying compatible CPU mode…');
-          }
+          onProgress('GPU mode did not start. Trying phone-compatible CPU mode…');
         }
+      }
+
+      try {
+        // IMPORTANT: leaving device unset is the supported Transformers.js WASM/CPU path.
+        return await loadPipeline(
+          pipeline,
+          { dtype: 'q8' },
+          'CPU',
+          onProgress
+        );
+      } catch (err) {
+        lastError = err;
+        console.warn('AI CPU failed:', err);
+        await disposeGenerator();
       }
 
       throw lastError || new Error('No AI backend was available');
     } catch (err) {
       console.warn('AI unavailable:', err);
       await disposeGenerator();
-      onProgress('AI could not start on this browser. Tap the AI switch to retry; the adaptive game still works.');
+      lastErrorMessage = String(err?.message || err || 'Unknown AI startup error').slice(0, 180);
+      onProgress(`AI startup failed: ${lastErrorMessage}`);
       return false;
     } finally {
       loading = null;
@@ -122,8 +140,8 @@ export async function remixQuestion(seed, player) {
 
   try {
     const out = await generator(messages, {
-      max_new_tokens: 150,
-      temperature: 0.55,
+      max_new_tokens: 120,
+      temperature: 0.45,
       top_p: 0.9,
       do_sample: true,
     });
@@ -157,5 +175,10 @@ export async function remixQuestion(seed, player) {
 }
 
 export function getAIStatus() {
-  return { ready: !!generator, backend: activeBackend, model: MODEL_ID };
+  return {
+    ready: !!generator,
+    backend: activeBackend,
+    model: MODEL_ID,
+    error: lastErrorMessage,
+  };
 }
