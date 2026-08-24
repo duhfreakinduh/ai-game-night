@@ -1,5 +1,5 @@
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
-const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
+const MODEL_ID = 'onnx-community/all-MiniLM-L6-v2-ONNX';
 
 let embedder = null;
 let loading = null;
